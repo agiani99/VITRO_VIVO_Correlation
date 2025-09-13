@@ -2,7 +2,8 @@
 
 # ChEMBL-PubChem-ProteinAtlas Integration Tool
 
-an attempt to generate examples of invitro vs invivo data correlation for drugs
+an attempt to generate examples of invitro vs invivo data correlation for drugs.
+![App_screenshot](https://github.com/agiani99/VITRO_VIVO_Correlation/blob/main/Screenshot.png)
 
 ## Setup Instructions
 
