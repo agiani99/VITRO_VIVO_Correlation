@@ -12,7 +12,7 @@ pip install -r requirements.txt
 
 ### 2. Prepare Data Files
 
-Make sure you have the `protein_atlas.tsv` file in the same directory as your Streamlit app. This file should contain the Protein Atlas data with the following key columns:
+Make sure you have unzipped the `protein_atlas.tsv` [file](https://www.proteinatlas.org/about/download#protein_atlas_data) in the same directory as your Streamlit app.
 
 ### 3. Run the Application
 
