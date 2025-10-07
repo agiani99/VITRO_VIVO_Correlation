@@ -85,7 +85,7 @@ class EnhancedCompoundAnalyzer:
             # First try exact flexmatch
             url = f"{self.chembl_base_url}/molecule.json"
             params = {"molecule_structures__canonical_smiles__flexmatch": smiles, "limit": 1}
-            response = self.session.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=params, timeout=60)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('molecules'):
@@ -97,7 +97,7 @@ class EnhancedCompoundAnalyzer:
                 canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
                 if canonical_smiles != smiles:
                     params = {"molecule_structures__canonical_smiles__flexmatch": canonical_smiles, "limit": 1}
-                    response = self.session.get(url, params=params, timeout=30)
+                    response = self.session.get(url, params=params, timeout=60)
                     if response.status_code == 200:
                         data = response.json()
                         if data.get('molecules'):
@@ -107,7 +107,7 @@ class EnhancedCompoundAnalyzer:
             # If still no results, try connectivity search (more flexible)
             if not results.get("chembl"):
                 params = {"molecule_structures__canonical_smiles__connectivity": smiles, "limit": 5}
-                response = self.session.get(url, params=params, timeout=30)
+                response = self.session.get(url, params=params, timeout=60)
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('molecules'):
@@ -121,7 +121,7 @@ class EnhancedCompoundAnalyzer:
                     inchi_key = inchi.MolToInchiKey(mol)
                     if inchi_key:
                         params = {"molecule_structures__standard_inchi_key": inchi_key, "limit": 1}
-                        response = self.session.get(url, params=params, timeout=30)
+                        response = self.session.get(url, params=params, timeout=60)
                         if response.status_code == 200:
                             data = response.json()
                             if data.get('molecules'):
@@ -136,7 +136,7 @@ class EnhancedCompoundAnalyzer:
         # Search PubChem
         try:
             url = f"{self.pubchem_base_url}/compound/smiles/{smiles}/JSON"
-            response = self.session.get(url, timeout=30)
+            response = self.session.get(url, timeout=60)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('PC_Compounds'):
@@ -153,7 +153,7 @@ class EnhancedCompoundAnalyzer:
         try:
             # Get compound from PubChem
             url = f"{self.pubchem_base_url}/compound/cid/{cid}/JSON"
-            response = self.session.get(url, timeout=30)
+            response = self.session.get(url, timeout=60)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('PC_Compounds'):
@@ -190,36 +190,107 @@ class EnhancedCompoundAnalyzer:
         return results
     
     def _search_by_chembl_id(self, chembl_id: str) -> Dict:
-        """Search by ChEMBL ID"""
+        """Search by ChEMBL ID with enhanced debugging"""
         results = {}
+        
+        st.info(f"🔍 Searching for ChEMBL ID: {chembl_id}")
         
         try:
             # Clean the ChEMBL ID if needed
+            original_id = chembl_id
             if not chembl_id.startswith('CHEMBL'):
                 chembl_id = f"CHEMBL{chembl_id}"
             
+            #st.write(f"**Debug:** Original input: {original_id}, Formatted ID: {chembl_id}")
+            
             # Get compound from ChEMBL
             url = f"{self.chembl_base_url}/molecule/{chembl_id}.json"
-            response = self.session.get(url, timeout=30)
+            #st.write(f"**Debug:** Requesting URL: {url}")
+            
+            response = self.session.get(url, timeout=60)
+            #st.write(f"**Debug:** Response status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
+                st.write(f"**Debug:** Found compound data for {chembl_id}")
+                
                 results["chembl"] = data
                 results["name"] = data.get('pref_name')
+                
+                # Show key compound info
+                st.success(f"✅ Found compound: {data.get('pref_name', 'Unknown name')}")
+                st.write(f"**Molecule type:** {data.get('molecule_type', 'Unknown')}")
+                st.write(f"**Max phase:** {data.get('max_phase', 'Unknown')}")
                 
                 # Extract SMILES
                 structures = data.get('molecule_structures', {})
                 if structures.get('canonical_smiles'):
                     results["smiles"] = structures['canonical_smiles']
+                    st.write(f"**SMILES:** {results['smiles']}")
                     
                     # Search PubChem with SMILES
                     if results["smiles"]:
-                        pubchem_results = self._search_by_smiles(results["smiles"])
-                        results["pubchem"] = pubchem_results.get("pubchem")
-            else:
-                st.warning(f"ChEMBL ID {chembl_id} not found")
+                        with st.spinner("Searching PubChem with SMILES..."):
+                            pubchem_results = self._search_by_smiles(results["smiles"])
+                            results["pubchem"] = pubchem_results.get("pubchem")
+                else:
+                    st.warning("No SMILES structure found for this compound")
+                    
+            elif response.status_code == 404:
+                st.error(f"❌ ChEMBL ID {chembl_id} not found in database")
                 
+                # Try alternative searches
+                st.write("**Trying alternative searches...**")
+                
+                # Try searching in molecules endpoint with different parameters
+                molecule_search_url = f"{self.chembl_base_url}/molecule.json"
+                search_params = [
+                    {'molecule_chembl_id': chembl_id},
+                    {'molecule_chembl_id': original_id},
+                    {'pref_name__icontains': original_id}
+                ]
+                
+                for i, params in enumerate(search_params):
+                    try:
+                        st.write(f"Alternative search {i+1}: {params}")
+                        response = self.session.get(molecule_search_url, params=params, timeout=60)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            molecules = data.get('molecules', [])
+                            st.write(f"Found {len(molecules)} molecules")
+                            
+                            if molecules:
+                                # Take the first match
+                                molecule = molecules[0]
+                                results["chembl"] = molecule
+                                results["name"] = molecule.get('pref_name')
+                                
+                                structures = molecule.get('molecule_structures', {})
+                                if structures.get('canonical_smiles'):
+                                    results["smiles"] = structures['canonical_smiles']
+                                
+                                st.success(f"✅ Found via alternative search: {molecule.get('pref_name', 'Unknown')}")
+                                break
+                    except Exception as e:
+                        st.write(f"Alternative search {i+1} failed: {e}")
+                        continue
+                
+            else:
+                st.error(f"❌ API Error {response.status_code}: {response.text[:200]}")
+                
+        except requests.exceptions.Timeout:
+            st.error(f"❌ Timeout while searching for ChEMBL ID {chembl_id}")
+        except requests.exceptions.ConnectionError:
+            st.error(f"❌ Connection error while searching for ChEMBL ID {chembl_id}")
         except Exception as e:
-            st.warning(f"ChEMBL ID search failed: {e}")
+            st.error(f"❌ ChEMBL ID search failed: {str(e)}")
+            
+            # Additional debugging
+            st.write("**Debug information:**")
+            st.write(f"- Original input: {original_id}")
+            st.write(f"- Formatted ID: {chembl_id}")
+            st.write(f"- Error type: {type(e).__name__}")
         
         return results
     
@@ -1055,134 +1126,198 @@ def main():
                             # Add explanation about the plot
                             st.info("""
                             **Plot Interpretation Guide:**
-                            - **Both axes are logarithmic** - each tick represents a 10-fold change
-                            - **Same units** - both axes use the same activity units (nM, µM, etc.) for the same activity type
+                            - **Linear axes with pChEMBL values** - higher values = higher potency
+                            - **Colors** represent different activity types (IC50, AC50, etc.)
+                            - **Symbols** differentiate assay types: ● = Binding (B), ■ = Functional (F)
                             - **Diagonal line** = perfect correlation (biochemical = cellular)
-                            - **Points above line** = cellular activity is higher than biochemical
-                            - **Points below line** = biochemical activity is higher than cellular
+                            - **Upper right** = high potency for both assays
                             """)
                             
                             valid_data = comparison_df.dropna(subset=['Biochemical_Median', 'Cellular_Median'])
                             if not valid_data.empty:
-                                # Get the most common activity type and unit for labeling
-                                common_activity_type = valid_data['Activity_Type'].mode().iloc[0] if not valid_data['Activity_Type'].empty else 'Activity'
-                                
-                                # Create enhanced scatter plot with better axis labels
-                                fig = px.scatter(
-                                    valid_data,
-                                    x='Biochemical_Median',
-                                    y='Cellular_Median',
-                                    color='Activity_Type',
-                                    hover_data=['Target_Name', 'Activity_Type', 'Cell_Line', 'Biochemical_Unit', 'Cellular_Unit'],
-                                    title=f"Biochemical vs Cellular Activity Correlation (Log Scale)<br><sub>Both axes in same units - comparing {common_activity_type} values</sub>",
-                                    labels={
-                                        'Biochemical_Median': f'Biochemical {common_activity_type} (Log Scale)',
-                                        'Cellular_Median': f'Cellular {common_activity_type} (Log Scale)'
-                                    },
-                                    log_x=True,
-                                    log_y=True
-                                )
-                                
-                                # Add annotation about log scale and units
-                                fig.add_annotation(
-                                    x=0.02, y=0.98,
-                                    xref='paper', yref='paper',
-                                    text="📊 Both axes: Log scale, same units<br>🎯 Perfect correlation = diagonal line<br>📈 Points above line: cellular > biochemical",
-                                    showarrow=False,
-                                    bgcolor="rgba(255,255,255,0.8)",
-                                    bordercolor="gray",
-                                    borderwidth=1,
-                                    font=dict(size=10)
-                                )
-                                
-                                # Get the range for the lines (extend slightly for better visualization)
-                                min_val = min(valid_data['Biochemical_Median'].min(), valid_data['Cellular_Median'].min()) * 0.8
-                                max_val = max(valid_data['Biochemical_Median'].max(), valid_data['Cellular_Median'].max()) * 1.2
-                                
-                                # Create x values for the reference lines
-                                x_vals = [min_val, max_val]
-                                
-                                # Perfect correlation (1:1) - Main reference line
-                                fig.add_scatter(
-                                    x=x_vals,
-                                    y=x_vals,
-                                    mode='lines',
-                                    name='Perfect correlation (1:1)',
-                                    line=dict(color='black', width=3),
-                                    showlegend=True
-                                )
-                                
-                                # 10-fold difference lines (more relevant for log scale)
-                                fig.add_scatter(
-                                    x=x_vals,
-                                    y=[val * 10 for val in x_vals],
-                                    mode='lines',
-                                    name='Cellular 10x higher',
-                                    line=dict(color='red', dash='dash', width=2),
-                                    showlegend=True
-                                )
-                                
-                                fig.add_scatter(
-                                    x=x_vals,
-                                    y=[val / 10 for val in x_vals],
-                                    mode='lines',
-                                    name='Biochemical 10x higher',
-                                    line=dict(color='blue', dash='dash', width=2),
-                                    showlegend=True
-                                )
-                                
-                                # Update layout with better axis formatting
-                                fig.update_layout(
-                                    height=600,
-                                    xaxis_title=f"Biochemical {common_activity_type} (Log Scale)",
-                                    yaxis_title=f"Cellular {common_activity_type} (Log Scale)",
-                                    legend=dict(
-                                        yanchor="top",
-                                        y=0.99,
-                                        xanchor="right",
-                                        x=0.99,
-                                        bgcolor="rgba(255,255,255,0.8)"
-                                    )
-                                )
-                                
-                                st.plotly_chart(fig, use_container_width=True, key="correlation_plot")
-                                
-                                # Add summary statistics about correlation
+                                # Convert to pChEMBL values for linear scale plotting
                                 import numpy as np
                                 
-                                # Calculate correlation coefficient (on log scale)
-                                correlation = np.corrcoef(
-                                    np.log10(valid_data['Biochemical_Median']), 
-                                    np.log10(valid_data['Cellular_Median'])
-                                )[0, 1]
+                                # Convert activity values to pChEMBL (negative log10)
+                                def convert_to_pchembl(values, units):
+                                    """Convert activity values to pChEMBL scale"""
+                                    pchembl_values = []
+                                    for val, unit in zip(values, units):
+                                        try:
+                                            val = float(val)
+                                            if val <= 0:
+                                                pchembl_values.append(None)
+                                                continue
+                                            
+                                            # Convert to Molar concentration first
+                                            if unit == 'nM':
+                                                molar = val * 1e-9
+                                            elif unit == 'uM' or unit == 'µM':
+                                                molar = val * 1e-6
+                                            elif unit == 'mM':
+                                                molar = val * 1e-3
+                                            elif unit == 'M':
+                                                molar = val
+                                            elif unit == 'pM':
+                                                molar = val * 1e-12
+                                            else:
+                                                # Default to nM if unknown unit
+                                                molar = val * 1e-9
+                                            
+                                            # Calculate pChEMBL (-log10 of Molar concentration)
+                                            pchembl = -np.log10(molar)
+                                            pchembl_values.append(pchembl)
+                                        except:
+                                            pchembl_values.append(None)
+                                    return pchembl_values
                                 
-                                # Count points within different fold-change ranges
-                                within_2fold = 0
-                                within_10fold = 0
-                                total_points = len(valid_data)
+                                # Convert biochemical and cellular values to pChEMBL
+                                valid_data = valid_data.copy()
+                                valid_data['Biochemical_pChEMBL'] = convert_to_pchembl(
+                                    valid_data['Biochemical_Median'], 
+                                    valid_data['Biochemical_Unit']
+                                )
+                                valid_data['Cellular_pChEMBL'] = convert_to_pchembl(
+                                    valid_data['Cellular_Median'], 
+                                    valid_data['Cellular_Unit']
+                                )
                                 
-                                for _, row in valid_data.iterrows():
-                                    x_val = row['Biochemical_Median']
-                                    y_val = row['Cellular_Median']
-                                    ratio = max(x_val/y_val, y_val/x_val)  # Fold difference
+                                # Filter out invalid pChEMBL values
+                                valid_data = valid_data.dropna(subset=['Biochemical_pChEMBL', 'Cellular_pChEMBL'])
+                                
+                                if not valid_data.empty:
+                                    # Add assay type symbols for B/F differentiation
+                                    # We need to get the assay type (B/F) for each target comparison
+                                    # For now, let's use a mix of both or default to circles
+                                    valid_data['Symbol'] = 'circle'  # Default for mixed or unknown
                                     
-                                    if ratio <= 2:
-                                        within_2fold += 1
-                                    if ratio <= 10:
-                                        within_10fold += 1
-                                
-                                # Display correlation statistics
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Correlation (log scale)", f"{correlation:.3f}")
-                                with col2:
-                                    st.metric("Within 2-fold", f"{within_2fold}/{total_points} ({within_2fold/total_points*100:.1f}%)")
-                                with col3:
-                                    st.metric("Within 10-fold", f"{within_10fold}/{total_points} ({within_10fold/total_points*100:.1f}%)")
-                                
-                                # Remove duplicate plotly_chart call
-                            else:
-                                st.warning("No valid data points for correlation plot")
+                                    # Create the enhanced scatter plot
+                                    fig = px.scatter(
+                                        valid_data,
+                                        x='Biochemical_pChEMBL',
+                                        y='Cellular_pChEMBL',
+                                        color='Activity_Type',
+                                        symbol='Symbol',
+                                        hover_data=['Target_Name', 'Activity_Type', 'Cell_Line', 'Biochemical_Unit', 'Cellular_Unit'],
+                                        title="Biochemical vs Cellular Activity Correlation (pChEMBL Scale)<br><sub>Linear scale with pChEMBL values - higher values indicate higher potency</sub>",
+                                        labels={
+                                            'Biochemical_pChEMBL': 'Biochemical pChEMBL Value',
+                                            'Cellular_pChEMBL': 'Cellular pChEMBL Value'
+                                        },
+                                        color_discrete_sequence=px.colors.qualitative.Set2
+                                    )
+                                    
+                                    # Update markers for better visibility
+                                    fig.update_traces(marker=dict(size=10, line=dict(width=1, color='DarkSlateGrey')))
+                                    
+                                    # Add annotation about scale and interpretation
+                                    fig.add_annotation(
+                                        x=0.02, y=0.98,
+                                        xref='paper', yref='paper',
+                                        text="📊 Linear pChEMBL scale: Higher values = Higher potency<br>🎯 Perfect correlation = diagonal line<br>📈 Upper right = High potency compounds",
+                                        showarrow=False,
+                                        bgcolor="rgba(255,255,255,0.9)",
+                                        bordercolor="gray",
+                                        borderwidth=1,
+                                        font=dict(size=10)
+                                    )
+                                    
+                                    # Get the range for reference lines
+                                    min_val = min(valid_data['Biochemical_pChEMBL'].min(), valid_data['Cellular_pChEMBL'].min()) - 0.5
+                                    max_val = max(valid_data['Biochemical_pChEMBL'].max(), valid_data['Cellular_pChEMBL'].max()) + 0.5
+                                    
+                                    # Perfect correlation (1:1) line
+                                    fig.add_scatter(
+                                        x=[min_val, max_val],
+                                        y=[min_val, max_val],
+                                        mode='lines',
+                                        name='Perfect correlation (1:1)',
+                                        line=dict(color='black', width=2, dash='solid'),
+                                        showlegend=True
+                                    )
+                                    
+                                    # ±1 pChEMBL unit lines (10-fold difference)
+                                    fig.add_scatter(
+                                        x=[min_val, max_val],
+                                        y=[min_val + 1, max_val + 1],
+                                        mode='lines',
+                                        name='Cellular 10x higher (+1 pChEMBL)',
+                                        line=dict(color='red', width=1, dash='dash'),
+                                        showlegend=True
+                                    )
+                                    
+                                    fig.add_scatter(
+                                        x=[min_val, max_val],
+                                        y=[min_val - 1, max_val - 1],
+                                        mode='lines',
+                                        name='Biochemical 10x higher (-1 pChEMBL)',
+                                        line=dict(color='blue', width=1, dash='dash'),
+                                        showlegend=True
+                                    )
+                                    
+                                    # Update layout with legend in bottom right
+                                    fig.update_layout(
+                                        height=700,
+                                        width=1000,
+                                        xaxis_title="Biochemical pChEMBL Value (Higher = More Potent)",
+                                        yaxis_title="Cellular pChEMBL Value (Higher = More Potent)",
+                                        legend=dict(
+                                            yanchor="bottom",
+                                            y=0.02,
+                                            xanchor="right",
+                                            x=0.98,
+                                            bgcolor="rgba(255,255,255,0.9)",
+                                            bordercolor="gray",
+                                            borderwidth=1
+                                        ),
+                                        # Ensure equal aspect ratio for better comparison
+                                        xaxis=dict(constrain='domain'),
+                                        yaxis=dict(scaleanchor='x', scaleratio=1)
+                                    )
+                                    
+                                    st.plotly_chart(fig, use_container_width=True, key="correlation_plot")
+                                    
+                                    # Add summary statistics about correlation
+                                    # Calculate correlation coefficient (linear scale now)
+                                    correlation = np.corrcoef(
+                                        valid_data['Biochemical_pChEMBL'], 
+                                        valid_data['Cellular_pChEMBL']
+                                    )[0, 1]
+                                    
+                                    # Count points within different pChEMBL unit ranges
+                                    within_05_pchembl = 0
+                                    within_1_pchembl = 0
+                                    total_points = len(valid_data)
+                                    
+                                    for _, row in valid_data.iterrows():
+                                        x_val = row['Biochemical_pChEMBL']
+                                        y_val = row['Cellular_pChEMBL']
+                                        diff = abs(x_val - y_val)  # pChEMBL unit difference
+                                        
+                                        if diff <= 0.5:
+                                            within_05_pchembl += 1
+                                        if diff <= 1.0:
+                                            within_1_pchembl += 1
+                                    
+                                    # Display correlation statistics
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("Correlation (linear)", f"{correlation:.3f}")
+                                    with col2:
+                                        st.metric("Within 0.5 pChEMBL", f"{within_05_pchembl}/{total_points} ({within_05_pchembl/total_points*100:.1f}%)")
+                                    with col3:
+                                        st.metric("Within 1.0 pChEMBL", f"{within_1_pchembl}/{total_points} ({within_1_pchembl/total_points*100:.1f}%)")
+                                    
+                                    # Add interpretation guide
+                                    st.info("""
+                                    **📊 pChEMBL Scale Interpretation:**
+                                    - **pChEMBL = -log10(IC50 in M)** - Higher values indicate higher potency
+                                    - **0.5 pChEMBL difference** ≈ 3-fold potency difference
+                                    - **1.0 pChEMBL difference** ≈ 10-fold potency difference
+                                    - **Typical ranges:** 4-5 (weak), 6-7 (moderate), 8+ (potent)
+                                    """)
+                                else:
+                                    st.warning("No valid pChEMBL data points for correlation plot")
                     else:
                         st.warning("No target comparison data available")
                         
